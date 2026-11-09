@@ -1,0 +1,12 @@
+faster-whisper>=1.2,<2
+av<19
+soundcard>=0.4.3
+soundfile>=0.12
+numpy>=1.26
+mss>=9.0
+pillow>=10.0
+pystray>=0.19
+keyboard>=0.13.5
+pywin32>=306
+psutil>=5.9
+anthropic>=2.7

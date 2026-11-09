@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uplink Settings</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --ink: #1b1a17; --muted: #6d6a63; --line: #e3e0d9;
+  --accent: #1b1a17; --accent-ink: #ffffff; --ok: #2f6b3a; --bad: #a33a2a; --field: #fbfaf8;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #131210; --panel: #1b1a17; --ink: #efece6; --muted: #9a968d; --line: #2e2c28;
+          --accent: #efece6; --accent-ink: #131210; --ok: #7fbf8a; --bad: #e48a7a; --field: #161513; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+       font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+main { max-width: 720px; margin: 0 auto; padding: 40px 16px 120px; }
+h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 4px; }
+.lede { color: var(--muted); margin: 0 0 32px; }
+section { border-top: 1px solid var(--line); padding: 24px 0; }
+h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 4px; }
+.hint { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+.choice { display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line);
+          background: var(--panel); border-radius: 6px; margin-bottom: 6px; cursor: pointer; }
+.choice:has(input:checked) { border-color: var(--ink); }
+.choice input { margin-top: 4px; accent-color: var(--ink); }
+.choice b { font-weight: 600; }
+.choice small { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.tag { font-size: 11px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 3px; margin-left: 6px; color: var(--muted); }
+.tag.ok { color: var(--ok); border-color: currentColor; }
+label.field { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 4px; }
+input[type=text], input[type=password] { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--field); color: var(--ink); font: inherit; }
+.row { display: flex; gap: 8px; }
+.row input { flex: 1; }
+button { font: inherit; padding: 9px 14px; border-radius: 6px; border: 1px solid var(--ink); background: transparent;
+         color: var(--ink); cursor: pointer; white-space: nowrap; }
+button.primary { background: var(--accent); color: var(--accent-ink); }
+button:disabled { opacity: 0.5; cursor: default; }
+a { color: inherit; }
+details { margin-top: 10px; }
+summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0; }
+.group { margin-top: 18px; font-weight: 600; font-size: 14px; }
+.msg { font-size: 13px; margin-top: 8px; min-height: 1.2em; }
+.msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
+.bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); }
+.bar div { max-width: 720px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 8px; align-items: center; }
+.bar .msg { flex: 1; margin: 0; }
+.note { font-size: 13px; color: var(--muted); border-left: 2px solid var(--line); padding-left: 10px; margin-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Uplink Settings</h1>
+  <p class="lede">Pick the AI that writes your notes, where they are saved, and which of your agents learn from them.</p>
+
+  <section>
+    <h2>1. Your AI</h2>
+    <p class="hint">Apps on this computer use your existing sign-in. API keys stay in a private file on this computer.</p>
+    <div id="providers"></div>
+    <div id="keyrow" hidden>
+      <label class="field" for="key">API key <a id="keylink" target="_blank" rel="noopener">Get a key</a></label>
+      <input type="password" id="key" autocomplete="off" placeholder="Paste your key">
+    </div>
+    <div id="ollamarow" hidden>
+      <label class="field" for="ollama">Ollama address</label>
+      <input type="text" id="ollama">
+    </div>
+    <label class="field" for="model">Model <span id="modelhint"></span></label>
+    <div class="row">
+      <input type="text" id="model" list="modellist" autocomplete="off">
+      <datalist id="modellist"></datalist>
+      <button id="loadmodels" type="button">Load models</button>
+    </div>
+    <div class="msg" id="modelmsg"></div>
+  </section>
+
+  <section>
+    <h2>2. Notes library</h2>
+    <p class="hint">Every lesson is saved here as a text file, with its transcript and screenshots.</p>
+    <input type="text" id="library">
+  </section>
+
+  <section>
+    <h2>3. Who learns from your notes</h2>
+    <p class="hint">Each lesson goes to the agents it fits. Ticked agents get a reading list and a line in their instructions to read it before a job.</p>
+    <div id="dests"></div>
+    <div class="group">Your own (Custom GPTs, Gems, Claude Projects)</div>
+    <p class="hint">Each gets its own upload folder. Add new notes from it to the GPT, Gem or Project's files.</p>
+    <div id="custom"></div>
+    <div class="row">
+      <input type="text" id="cname" placeholder="Name, e.g. Brand Coach GPT">
+      <input type="text" id="cdesc" placeholder="What it helps with">
+      <button type="button" id="cadd">Add</button>
+    </div>
+    <p class="note" id="topicnote">Nothing ticked: notes are filed by topic (design, video, marketing and so on).</p>
+  </section>
+
+  <section id="memsec">
+    <h2>4. Tell your AI about the library</h2>
+    <p class="hint">Adds one short paragraph to your AI app's main instructions, so every chat knows where your notes are.</p>
+    <div id="mems"></div>
+  </section>
+</main>
+
+<div class="bar"><div>
+  <span class="msg" id="msg"></span>
+  <button type="button" id="test">Test</button>
+  <button type="button" class="primary" id="save">Save</button>
+</div></div>
+
+<script>
+const TOKEN = "__TOKEN__";
+const $ = id => document.getElementById(id);
+let S, custom = [];
+
+async function api(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json", "x-token": TOKEN },
+                                body: JSON.stringify(body || {}) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || "Something went wrong");
+  return j;
+}
+const esc = s => String(s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const short = s => (s = String(s || "").replace(/\s+/g, " ")).length > 180 ? s.slice(0, 180) + "..." : s;
+const provider = () => (document.querySelector("input[name=provider]:checked") || {}).value;
+function say(el, text, kind) { el.textContent = text; el.className = "msg " + (kind || ""); }
+
+function renderProviders() {
+  const cur = S.config.provider || Object.keys(S.providers).find(p => S.providers[p].installed) || "anthropic";
+  $("providers").innerHTML = Object.entries(S.providers).map(([id, p]) => {
+    let tag = "";
+    if (p.kind === "cli") tag = p.installed ? '<span class="tag ok">Installed</span>' : '<span class="tag">Not found</span>';
+    if (p.kind === "api") tag = S.config.has_key[id] ? '<span class="tag ok">Key saved</span>' : '<span class="tag">Needs a key</span>';
+    const sub = { cli: "Uses the app you already pay for and are signed in to.",
+                  api: "Pay per use on your own account. Works without any app installed.",
+                  local: "Runs on this computer. Needs Ollama and a downloaded model." }[p.kind];
+    return `<label class="choice"><input type="radio" name="provider" value="${id}" ${id === cur ? "checked" : ""}>
+      <span><b>${esc(p.label)}</b>${tag}<small>${sub}</small></span></label>`;
+  }).join("");
+  document.querySelectorAll("input[name=provider]").forEach(r => r.addEventListener("change", () => onProvider(true)));
+}
+
+function onProvider(changed) {
+  const id = provider(), p = S.providers[id];
+  $("keyrow").hidden = p.kind !== "api";
+  $("ollamarow").hidden = p.kind !== "local";
+  $("loadmodels").hidden = p.kind === "cli";
+  if (p.keys) $("keylink").href = p.keys;
+  $("key").placeholder = S.config.has_key[id] ? "Key saved. Paste a new one to replace it." : "Paste your key";
+  if (changed || !$("model").value) $("model").value = (id === S.config.provider && S.config.model) || p.model || "";
+  $("modelhint").textContent = p.kind === "cli" ? "(optional; empty uses the app's default)" : "";
+  $("modellist").innerHTML = "";
+  say($("modelmsg"), "");
+  document.querySelectorAll("input[name=mem]").forEach(m => {
+    if (changed) m.checked = ({ "claude-code": "claude", "codex": "codex", "gemini-cli": "gemini" })[id] === m.value;
+  });
+}
+
+function savedIds() { return new Set(S.config.routes.filter(r => r.kind !== "topic").map(r => r.kind + ":" + r.id)); }
+
+function renderDests() {
+  const saved = savedIds(), first = S.config.first_run || saved.size === 0;
+  const groups = {};
+  S.destinations.forEach((d, i) => {
+    const g = d.home + (d.kind.endsWith("agent") ? " agents" : " skills");
+    (groups[g] = groups[g] || []).push([d, i]);
+  });
+  const box = ([d, i]) => {
+    const on = saved.has(d.kind + ":" + d.id) || (first && d.kind.endsWith("agent"));
+    return `<label class="choice"><input type="checkbox" class="dest" data-i="${i}" ${on ? "checked" : ""}>
+      <span><b>${esc(d.id)}</b><small>${esc(short(d.description)) || "No description"}</small></span></label>`;
+  };
+  $("dests").innerHTML = Object.keys(groups).length ? Object.entries(groups).map(([g, items]) => g.endsWith("skills")
+      ? `<details ${items.some(([d]) => saved.has(d.kind + ":" + d.id)) ? "open" : ""}><summary>${esc(g)} (${items.length})</summary>${items.map(box).join("")}</details>`
+      : `<div class="group">${esc(g)}</div>${items.map(box).join("")}`).join("")
+    : '<p class="hint">No Claude Code, Codex or Gemini CLI agents found on this computer.</p>';
+  custom = S.config.routes.filter(r => r.kind === "folder");
+  renderCustom();
+  document.querySelectorAll(".dest").forEach(c => c.addEventListener("change", topicNote));
+  topicNote();
+}
+
+function renderCustom() {
+  $("custom").innerHTML = custom.map((c, i) => `<label class="choice"><input type="checkbox" checked data-c="${i}" class="cust">
+    <span><b>${esc(c.id)}</b><small>${esc(c.description)} · upload folder: for-upload/${esc(c.id)}</small></span></label>`).join("");
+  document.querySelectorAll(".cust").forEach(c => c.addEventListener("change", topicNote));
+  topicNote();
+}
+
+function topicNote() { $("topicnote").hidden = routes().length > 0; }
+
+function routes() {
+  const out = [], seen = new Set();
+  document.querySelectorAll(".dest:checked").forEach(c => {
+    const d = S.destinations[c.dataset.i];
+    if (seen.has(d.id)) return; seen.add(d.id);
+    out.push({ id: d.id, description: d.description, kind: d.kind, file: d.file });
+  });
+  document.querySelectorAll(".cust:checked").forEach(c => {
+    const d = custom[c.dataset.c];
+    if (!seen.has(d.id)) { seen.add(d.id); out.push(d); }
+  });
+  return out;
+}
+
+function renderMems() {
+  const list = Object.entries(S.memories).filter(([, m]) => m.exists);
+  $("memsec").hidden = !list.length;
+  $("mems").innerHTML = list.map(([id, m]) => `<label class="choice"><input type="checkbox" name="mem" value="${id}">
+    <span><b>${esc(m.label)}</b><small>${esc(m.file)}</small></span></label>`).join("");
+}
+
+function body() {
+  return { provider: provider(), model: $("model").value.trim(), key: $("key").value.trim(),
+           ollama_url: $("ollama").value.trim(), library: $("library").value.trim(), routes: routes(),
+           link_memories: [...document.querySelectorAll("input[name=mem]:checked")].map(m => m.value) };
+}
+
+$("loadmodels").onclick = async () => {
+  say($("modelmsg"), "Loading...");
+  try {
+    const { models } = await api("/api/models", { provider: provider(), key: $("key").value.trim(), ollama_url: $("ollama").value.trim() });
+    $("modellist").innerHTML = models.map(m => `<option value="${esc(m)}">`).join("");
+    say($("modelmsg"), models.length ? `${models.length} models available. Click the field to choose.` : "No models found.", models.length ? "ok" : "bad");
+  } catch (e) { say($("modelmsg"), e.message, "bad"); }
+};
+
+$("cadd").onclick = () => {
+  const name = $("cname").value.trim();
+  const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  if (!id) return;
+  custom.push({ id, description: $("cdesc").value.trim() || name, kind: "folder", file: "" });
+  $("cname").value = $("cdesc").value = "";
+  renderCustom();
+};
+
+$("test").onclick = async () => {
+  $("test").disabled = true; say($("msg"), "Asking your AI...");
+  try { const r = await api("/api/test", body()); say($("msg"), `Connected. It replied: ${r.reply}`, "ok"); }
+  catch (e) { say($("msg"), e.message, "bad"); }
+  $("test").disabled = false;
+};
+
+$("save").onclick = async () => {
+  $("save").disabled = true; say($("msg"), "Saving...");
+  try {
+    const r = await api("/api/save", body());
+    const parts = ["Saved."];
+    if (r.linked.length) parts.push(`Linked: ${r.linked.join(", ")}.`);
+    if (r.told.length) parts.push(`Told ${r.told.join(" and ")} about your library.`);
+    parts.push("You can close this tab.");
+    say($("msg"), parts.join(" "), "ok");
+  } catch (e) { say($("msg"), e.message, "bad"); $("save").disabled = false; }
+};
+
+(async () => {
+  S = await api("/api/state");
+  $("library").value = S.config.library;
+  $("ollama").value = S.config.ollama_url;
+  renderProviders(); renderMems(); onProvider(S.config.first_run); renderDests();
+})().catch(e => say($("msg"), e.message, "bad"));
+</script>
+</body>
+</html>

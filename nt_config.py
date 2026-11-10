@@ -27,16 +27,23 @@ else:
 
 # Which AI writes the notes. "kind": cli runs a program on this computer; api needs a key.
 PROVIDERS = {
-    "claude-code": {"label": "Claude (Claude Code app)", "kind": "cli", "program": "claude"},
-    "codex": {"label": "ChatGPT (Codex app)", "kind": "cli", "program": "codex"},
-    "gemini-cli": {"label": "Gemini (Gemini CLI)", "kind": "cli", "program": "gemini"},
+    "claude-code": {"label": "Claude (Claude Code app)", "kind": "cli", "program": "claude",
+                    "cost": "Needs a paid Claude plan (Pro or higher). Uses the plan you already have."},
+    "codex": {"label": "ChatGPT (Codex app)", "kind": "cli", "program": "codex",
+              "cost": "Sign in with ChatGPT. Paid plans work; free ChatGPT accounts may get a small, limited allowance."},
+    "gemini-cli": {"label": "Gemini (Gemini CLI)", "kind": "cli", "program": "gemini",
+                   "cost": "Sign in with Google. Free access may be limited; the free Gemini key below is the surer free option."},
     "anthropic": {"label": "Claude (API key)", "kind": "api", "model": "claude-opus-5-5",
+                  "cost": "Pay per use on your own Anthropic account. No free tier.",
                   "keys": "https://platform.claude.com/settings/keys"},
     "openai": {"label": "ChatGPT (OpenAI API key)", "kind": "api", "model": "gpt-5.5",
+               "cost": "Pay per use on your own OpenAI account. A ChatGPT subscription does not include it.",
                "keys": "https://platform.openai.com/api-keys"},
-    "gemini": {"label": "Gemini (Google AI Studio key)", "kind": "api", "model": "gemini-3.6-flash",
+    "gemini": {"label": "Gemini (free key from Google AI Studio)", "kind": "api", "model": "gemini-3.6-flash", "free": True,
+               "cost": "Free with any Google account, about 250 requests a day on Flash. One lesson's notes or one question uses one.",
                "keys": "https://aistudio.google.com/apikey"},
-    "ollama": {"label": "Local model (Ollama, free, offline)", "kind": "local", "model": ""},
+    "ollama": {"label": "Local model (Ollama, free, offline)", "kind": "local", "model": "", "free": True,
+               "cost": "Free and private, runs on your computer. Needs a strong computer and gives simpler notes."},
 }
 
 # Folders used when the user has no agents: one reading list per topic.

@@ -66,6 +66,10 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0;
     <h2>1. Your AI</h2>
     <p class="hint">Apps on this computer use your existing sign-in. API keys stay in a private file on this computer.</p>
     <div id="providers"></div>
+    <div id="freeguide" class="note" hidden>No paid AI plan? Get a free Gemini key in one minute:
+      1. Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with any Google account.
+      2. Click <b>Create API key</b> and copy it.
+      3. Paste it below, then press <b>Load models</b> and <b>Test</b>.</div>
     <div id="keyrow" hidden>
       <label class="field" for="key">API key <a id="keylink" target="_blank" rel="noopener">Get a key</a></label>
       <input type="password" id="key" autocomplete="off" placeholder="Paste your key">
@@ -152,9 +156,8 @@ function renderProviders() {
     let tag = "";
     if (p.kind === "cli") tag = p.installed ? '<span class="tag ok">Installed</span>' : '<span class="tag">Not found</span>';
     if (p.kind === "api") tag = S.config.has_key[id] ? '<span class="tag ok">Key saved</span>' : '<span class="tag">Needs a key</span>';
-    const sub = { cli: "Uses the app you already pay for and are signed in to.",
-                  api: "Pay per use on your own account. Works without any app installed.",
-                  local: "Runs on this computer. Needs Ollama and a downloaded model." }[p.kind];
+    if (p.free) tag += '<span class="tag ok">Free</span>';
+    const sub = p.cost || "";
     return `<label class="choice"><input type="radio" name="provider" value="${id}" ${id === cur ? "checked" : ""}>
       <span><b>${esc(p.label)}</b>${tag}<small>${sub}</small></span></label>`;
   }).join("");
@@ -164,6 +167,7 @@ function renderProviders() {
 function onProvider(changed) {
   const id = provider(), p = S.providers[id];
   $("keyrow").hidden = p.kind !== "api";
+  $("freeguide").hidden = id !== "gemini";
   $("ollamarow").hidden = p.kind !== "local";
   $("loadmodels").hidden = p.kind === "cli";
   if (p.keys) $("keylink").href = p.keys;

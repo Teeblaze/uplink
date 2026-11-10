@@ -103,6 +103,9 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0;
       <span><b>A still ring</b><small>A lime ring appears on the spot for a few seconds. Nothing moves.</small></span></label>
     <label class="choice"><input type="radio" name="mark" value="pointer">
       <span><b>A gliding pointer</b><small>A lime arrow glides from beside your cursor to the spot. Your real mouse never moves.</small></span></label>
+    <label class="field">Little moments</label>
+    <label class="choice"><input type="checkbox" id="stickers">
+      <span><b>Show stickers</b><small>A small sticker pops out beside the island when a lesson starts, a screenshot is caught, a note is saved or your notes are sent.</small></span></label>
   </section>
 
   <section>
@@ -285,6 +288,7 @@ function listen(box) {
 function body() {
   return { provider: provider(), model: $("model").value.trim(), key: $("key").value.trim(), shortcuts: keys,
            mark_style: (document.querySelector("input[name=mark]:checked") || {}).value || "ring",
+           stickers: $("stickers").checked,
            ollama_url: $("ollama").value.trim(), library: $("library").value.trim(), routes: routes(),
            link_memories: [...document.querySelectorAll("input[name=mem]:checked")].map(m => m.value) };
 }
@@ -334,6 +338,7 @@ $("save").onclick = async () => {
   renderKeys();
   const mark = document.querySelector(`input[name=mark][value=${S.config.mark_style === "pointer" ? "pointer" : "ring"}]`);
   if (mark) mark.checked = true;
+  $("stickers").checked = S.config.stickers !== false;
   renderProviders(); renderMems(); onProvider(S.config.first_run); renderDests();
 })().catch(e => say($("msg"), e.message, "bad"));
 </script>

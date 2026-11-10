@@ -46,6 +46,8 @@ def merged(body):
         cfg["routes"] = body["routes"]
     if isinstance(body.get("shortcuts"), dict):
         cfg["shortcuts"] = {k: str(v) for k, v in body["shortcuts"].items() if k in ("lesson", "note", "ask") and v}
+    if isinstance(body.get("stickers"), bool):
+        cfg["stickers"] = body["stickers"]
     if body.get("mark_style") in ("ring", "pointer"):
         cfg["mark_style"] = body["mark_style"]
     if "screenshots" in body:

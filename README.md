@@ -43,6 +43,9 @@ Change any of them in **Settings > Your shortcuts**: click a box and press the k
 
 The menu also has **Ask my library** (answers only from your notes, with the lesson and timestamp for each point), **Open last notes**, **Take screenshots of the lesson** (on by default) and **Settings**.
 
+## The island
+While a lesson records, the Mac's notch grows a small strip: the time, the screenshot count and one lime line for the lesson sound. Hover it for the lesson so far, Stop and Open folder. When you ask a question, the answer drops down from it. When notes are ready, it says where they went, with Open. Small stickers mark the moments (turn them off in Settings). On Macs without a notch it sits under the menu bar.
+
 ## Settings
 - **Your AI.** Claude Code, Codex (ChatGPT) or Gemini CLI use the sign-in you already have. Or paste a Claude, OpenAI or Gemini API key (pay per use). Or run a free model on your own computer with [Ollama](https://ollama.com). Press **Test** to check the connection.
 - **Notes library.** One folder of plain text notes, with each lesson's full transcript and screenshots. Default: `Documents/Uplink Library`.

@@ -86,7 +86,8 @@ DEFAULTS = {
     "routes": [],            # [{id, description, kind, file}]
     "screenshots": True,
     "shortcuts": {},         # filled per platform by shortcuts()
-    "mark_style": "ring",    # Ask the lesson marks the spot with a still "ring" or a gliding "pointer"
+    "mark_style": "ring",
+    "stickers": True,        # small stickers beside the island at key moments    # Ask the lesson marks the spot with a still "ring" or a gliding "pointer"
 }
 
 # Default keys. "lesson" toggles, "note" and "ask" are held while speaking.

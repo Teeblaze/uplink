@@ -10,6 +10,7 @@ import ImageIO
 import Carbon.HIToolbox
 import ScreenCaptureKit
 import ServiceManagement
+import SwiftUI
 import UserNotifications
 
 /// The Uplink folder (scripts and .venv). build.sh writes it into Info.plist as UplinkHome.
@@ -57,6 +58,8 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private let shotsDir: URL?
     private let queue = DispatchQueue(label: "uplink.audio")
     private(set) var framesWritten: AVAudioFramePosition = 0
+    /// Latest loudness (RMS), read by the island's foot line.
+    private(set) var level: Float = 0
 
     // Smart screenshots: keep a frame when the screen changed and has settled.
     // Saves more often when the lesson is quiet (a silent demo).
@@ -137,7 +140,9 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         if let ch = pcm.floatChannelData?[0] {
             var sum: Float = 0
             for i in 0..<Int(frames) { sum += ch[i] * ch[i] }
-            if (sum / Float(frames)).squareRoot() > 0.01 { lastLoud = Date().timeIntervalSince(began) }
+            let rms = (sum / Float(frames)).squareRoot()
+            level = rms
+            if rms > 0.01 { lastLoud = Date().timeIntervalSince(began) }
         }
     }
 
@@ -340,8 +345,8 @@ final class GlidingPointer {
         path.addLine(to: CGPoint(x: size * 0.30, y: 4))
         path.closeSubpath()
         arrow.path = path
-        arrow.fillColor = NSColor(red: 0.863, green: 1.0, blue: 0.180, alpha: 1).cgColor
-        arrow.strokeColor = NSColor(red: 0.086, green: 0.094, blue: 0.090, alpha: 1).cgColor
+        arrow.fillColor = Grids.limeNS.cgColor
+        arrow.strokeColor = Grids.inkNS.cgColor
         arrow.lineWidth = 2
         arrow.lineJoin = .round
         view.layer?.addSublayer(arrow)
@@ -351,8 +356,8 @@ final class GlidingPointer {
         // Tip sits on the spot: shift so the arrow's top-left tip lands on the target.
         let end = NSRect(x: target.x - 3, y: target.y - size + 3, width: size, height: size)
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.7
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            ctx.duration = Grids.reduceMotion ? 0.01 : 0.75
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 0, 0.2, 1)
             w.animator().setFrame(end, display: true)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self, weak w] in
@@ -435,7 +440,7 @@ final class HighlightRing {
         window?.orderOut(nil)
         guard let primary = NSScreen.screens.first else { return }
         let size: CGFloat = 76
-        let origin = NSPoint(x: p.x - size / 2, y: primary.frame.height - p.y - size / 2) // CG (top-left) to AppKit
+        let origin = NSPoint(x: p.x - size / 2, y: primary.frame.height - p.y - size / 2 - 7) // CG (top-left) to AppKit
         let w = NSWindow(contentRect: NSRect(origin: origin, size: NSSize(width: size, height: size)),
                          styleMask: .borderless, backing: .buffered, defer: false)
         w.isOpaque = false
@@ -445,12 +450,22 @@ final class HighlightRing {
         w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         let ring = NSView(frame: NSRect(x: 0, y: 0, width: size, height: size))
         ring.wantsLayer = true
-        let shape = CAShapeLayer()
-        shape.path = CGPath(ellipseIn: CGRect(x: 6, y: 6, width: size - 12, height: size - 12), transform: nil)
-        shape.fillColor = .clear
-        shape.strokeColor = NSColor(red: 0.863, green: 1.0, blue: 0.180, alpha: 1).cgColor
-        shape.lineWidth = 4
-        ring.layer?.addSublayer(shape)
+        // Grids lime, 1 pt ink keyline inside and outside so it shows on light and dark screens; short stem on top.
+        let box = CGRect(x: 10, y: 10, width: size - 20, height: size - 34)
+        let path = CGMutablePath()
+        path.addRoundedRect(in: box, cornerWidth: 7, cornerHeight: 7)
+        path.move(to: CGPoint(x: box.midX, y: box.maxY))
+        path.addLine(to: CGPoint(x: box.midX, y: box.maxY + 12.5))
+        for (color, width) in [(Grids.inkNS, 3.5), (Grids.limeNS, 1.5)] {
+            let shape = CAShapeLayer()
+            shape.path = path
+            shape.fillColor = .clear
+            shape.strokeColor = color.cgColor
+            shape.lineWidth = width
+            ring.layer?.addSublayer(shape)
+        }
+        ring.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.18; ring.animator().alphaValue = 1 }
         w.contentView = ring
         w.orderFrontRegardless()
         window = w
@@ -471,7 +486,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let mic = MicNoteRecorder()
     private let askMic = MicNoteRecorder()
     private let speech = AVSpeechSynthesizer()
-    private let card = AnswerCard()
+    private let island = Island()
+    private let stickers = StickerShow()
+    private var lastShotCount = 0
     private let ring = HighlightRing()
     private let pointer = GlidingPointer()
     private var askDir: URL?
@@ -498,6 +515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         hotKeys.onAskUp = { [weak self] in self?.askUp() }
         hotKeys.register(shortcuts)
         configStamp = configModified()
+        setUpIsland()
         // Settings is a web page; pick up new shortcuts a moment after it saves.
         Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.reloadIfConfigChanged() }
         UNUserNotificationCenter.current().delegate = self
@@ -528,6 +546,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 try await rec.start(pid: front?.processIdentifier)
             } catch {
                 try? FileManager.default.removeItem(at: dir)
+                self.showError("Screen recording blocked", "Allow Uplink in System Settings, then try again.",
+                               fix: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
                 self.notify("Could not start recording", "Allow Uplink in System Settings > Privacy & Security > Screen & System Audio Recording, then try again.", path: nil)
                 return
             }
@@ -539,9 +559,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             self.recorder = rec
             self.session = dir
             self.startedAt = Date()
-            self.timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
+            self.timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
+            self.island.model.marks = []
+            self.island.model.notes = 0
+            self.island.model.shots = 0
+            self.lastShotCount = 0
+            self.island.set(.recording)
+            self.stickers.show("lesson-started", beside: self.island.anchor)
             self.refresh()
-            self.notify("Recording lesson", title, path: nil)
         }
     }
 
@@ -551,6 +576,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         recorder = nil
         timer?.invalidate()
         timer = nil
+        island.model.hovering = false
+        island.model.step = 1
+        island.set(.processing)
         Task { @MainActor in
             await rec.stop()
             self.session = nil
@@ -566,14 +594,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let offset = Int(Date().timeIntervalSince(start))
         noteStartedAt = Date()
         mic.start(url: dir.appendingPathComponent("voice-notes/\(offset).caf"))
+        island.model.noteSeconds = 0
+        island.set(.note)
         refresh()
     }
 
     private func noteUp() {
         guard noteStartedAt != nil else { return }
         mic.stop()
+        if let start = startedAt, let began = noteStartedAt {
+            island.model.marks.append(TimelineMark(t: Int(began.timeIntervalSince(start)), isNote: true))
+        }
         noteStartedAt = nil
+        island.model.notes += 1
+        island.set(.recording)
+        stickers.show("note-saved", beside: island.anchor)
         refresh()
+    }
+
+    // MARK: Island
+
+    private var fixTarget: String?
+
+    private func setUpIsland() {
+        let m = island.model
+        m.keys = shortcuts.mapValues { $0.label }
+        m.onStop = { [weak self] in self?.stopLesson() }
+        m.onOpenFolder = { [weak self] in
+            if let dir = self?.session { NSWorkspace.shared.open(dir) }
+        }
+        m.onOpenNotes = { [weak self] in
+            if let p = self?.lastNotes { NSWorkspace.shared.open(URL(fileURLWithPath: p)) }
+            self?.island.settle()
+        }
+        m.onFix = { [weak self] in
+            if let t = self?.fixTarget {
+                NSWorkspace.shared.open(t.hasPrefix("/") ? URL(fileURLWithPath: t) : URL(string: t)!)
+            }
+            self?.island.settle()
+        }
+        m.onDismiss = { [weak self] in self?.island.settle() }
+        island.isRecording = { [weak self] in self?.recorder != nil }
+        stickers.enabled = { (readConfig()["stickers"] as? Bool) ?? true }
+    }
+
+    private func showError(_ title: String, _ line: String, fix: String? = nil) {
+        fixTarget = fix
+        island.model.errorTitle = title
+        island.model.errorLine = line
+        island.set(.error, autoHide: 9)
+        stickers.show("oops", beside: island.anchor, minGap: 30)
+    }
+
+    /// Four times a second while recording: time, sound level, new screenshots, note timer.
+    private func tick() {
+        let m = island.model
+        if let start = startedAt { m.elapsed = Int(Date().timeIntervalSince(start)) }
+        if let rec = recorder { m.level = Double(rec.level) }
+        if let began = noteStartedAt { m.noteSeconds = Int(Date().timeIntervalSince(began)) }
+        if let shots = session?.appendingPathComponent("shots"),
+           let files = try? FileManager.default.contentsOfDirectory(atPath: shots.path) {
+            let jpgs = files.filter { $0.hasSuffix(".jpg") }
+            if jpgs.count > lastShotCount {
+                for f in jpgs { if let t = Int(f.dropLast(4)), !m.marks.contains(where: { !$0.isNote && $0.t == t }) {
+                    m.marks.append(TimelineMark(t: t, isNote: false)) } }
+                lastShotCount = jpgs.count
+                m.shots = jpgs.count
+                m.flash = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { m.flash = false }
+                stickers.show("screenshot-caught", beside: island.anchor, minGap: 45)
+            }
+        }
+        if Int(Date().timeIntervalSince1970 * 4) % 4 == 0 { refresh() }
     }
 
     // MARK: Ask the lesson (idea from Clicky, github.com/farzaa/clicky, MIT)
@@ -588,6 +680,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         configStamp = stamp
         shortcuts = configuredShortcuts()
         hotKeys.register(shortcuts)
+        island.model.keys = shortcuts.mapValues { $0.label }
         refresh()
     }
 
@@ -601,7 +694,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         askDir = dir
         askStarted = Date()
         speech.stopSpeaking(at: .immediate)
-        card.show("Listening", "Ask about your screen. Let go of \(label("ask")) when you finish.")
+        island.set(.listening)
         askMic.start(url: dir.appendingPathComponent("question.caf"))
         let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
         Task { @MainActor in await self.captureWindow(pid: pid, into: dir) }
@@ -612,8 +705,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         askMic.stop()
         askDir = nil
         askStarted = nil
-        guard Date().timeIntervalSince(started) > 0.7 else { card.hide(); return }
-        card.show("Thinking", "Looking at your screen...")
+        guard Date().timeIntervalSince(started) > 0.7 else { island.settle(); return }
+        island.set(.thinking)
         let lessonOffset = startedAt.map { Int(started.timeIntervalSince($0)) }
         let lessonDir = session
         processing += 1
@@ -633,7 +726,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         do { try p.run() } catch {
             processing -= 1
-            card.show("Could not answer", "Uplink could not start its helper.", hideAfter: 6)
+            showError("Could not answer", "Uplink could not start its helper.")
         }
     }
 
@@ -663,17 +756,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func showAnswer(dir: URL, lessonDir: URL?, offset: Int?) {
         guard let data = try? Data(contentsOf: dir.appendingPathComponent("answer.json")),
               let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            card.show("Could not answer", "No answer came back. Check Settings and try again.", hideAfter: 6)
+            showError("Could not answer", "No answer came back. Check Settings and try again.")
             return
         }
         if let error = result["error"] as? String {
-            card.show("Could not answer", error, hideAfter: 7)
+            showError("Could not answer", error)
             return
         }
         let question = result["question"] as? String ?? ""
         let answer = result["answer"] as? String ?? ""
         let words = answer.split(separator: " ").count
-        card.show(question.isEmpty ? "Answer" : question, answer, hideAfter: max(7, Double(words) * 0.45 + 3))
+        island.model.question = question
+        island.model.answer = answer
+        island.set(.answer, autoHide: min(20, max(8, Double(words) * 0.45 + 4)))
+        stickers.show("question-answered", beside: island.anchor)
         speech.speak(AVSpeechUtterance(string: answer))
         if let point = result["point"] as? [String: Double],
            let fdata = try? Data(contentsOf: dir.appendingPathComponent("window.json")),
@@ -707,6 +803,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func process(_ dir: URL) {
         processing += 1
         refresh()
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] t in
+            guard let self, self.island.model.state == .processing else { t.invalidate(); return }
+            let log = (try? String(contentsOf: dir.appendingPathComponent("process.log"), encoding: .utf8)) ?? ""
+            self.island.model.step = log.contains("writing notes") ? 2 : 1
+        }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/zsh")
         p.arguments = ["\(toolDir)/process.sh", dir.path]
@@ -726,9 +827,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     let title = parts.count > 2 ? parts[2] : "Lesson"
                     let agents = parts.count > 3 ? parts[3] : ""
                     self.notify("Notes saved: \(title)", agents.isEmpty ? "Saved to your notes library" : "For \(agents)", path: self.lastNotes)
+                    self.island.model.sentTo = agents.isEmpty ? "Saved to your notes library" : "Sent to \(agents)"
+                    self.island.set(.done, autoHide: 10)
+                    self.stickers.show("notes-sent", beside: self.island.anchor)
+                    let done = UserDefaults.standard.integer(forKey: "lessonsDone") + 1
+                    UserDefaults.standard.set(done, forKey: "lessonsDone")
+                    if done % 5 == 0 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) { self.stickers.show("streak-5", beside: self.island.anchor) }
+                    }
                 } else {
                     let why = result?.replacingOccurrences(of: "ERROR|", with: "") ?? "See process.log in the session folder."
                     self.notify("Notes failed", why, path: dir.appendingPathComponent("process.log").path)
+                    self.showError("Notes failed", why, fix: dir.appendingPathComponent("process.log").path)
                 }
                 self.refresh()
             }
@@ -773,7 +883,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard let button = statusItem.button else { return }
         if let start = startedAt {
             let s = Int(Date().timeIntervalSince(start))
-            button.image = NSImage(systemSymbolName: noteStartedAt != nil ? "mic.fill" : "record.circle.fill", accessibilityDescription: "Recording")
+            let dark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let live = Bundle.main.image(forResource: dark ? "glyph-live" : "glyph-live-light")
+            live?.size = NSSize(width: 18, height: 18)
+            button.image = noteStartedAt != nil ? NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Note")
+                : (live ?? NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "Recording"))
             button.title = String(format: " %d:%02d", s / 60, s % 60)
         } else {
             button.image = processing > 0
@@ -875,6 +989,483 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             processing -= 1
             refresh()
         }
+    }
+}
+
+// MARK: - Island (direction C "Drop", Grids colours)
+// The notch grows straight down at notch width. One line at its foot does every job: lesson sound,
+// then progress. Hover opens a panel; Ask opens an answer card. Lime = live, green = saved or finished,
+// red = errors only. The real mouse never moves.
+
+enum Grids {
+    static let ink = Color(red: 0.031, green: 0.102, blue: 0.114)      // #081A1D
+    static let lime = Color(red: 0.863, green: 1.0, blue: 0.180)       // #DCFF2E
+    static let green = Color(red: 0.545, green: 1.0, blue: 0.459)      // #8BFF75
+    static let paper = Color(red: 0.925, green: 0.922, blue: 0.902)    // #ECEBE6
+    static let red = Color(red: 1.0, green: 0.420, blue: 0.341)        // #FF6B57
+    static let limeNS = NSColor(red: 0.863, green: 1.0, blue: 0.180, alpha: 1)
+    static let inkNS = NSColor(red: 0.031, green: 0.102, blue: 0.114, alpha: 1)
+
+    /// Archivo Narrow SemiBold and IBM Plex when installed; the Mac's own fonts otherwise.
+    static func caps(_ size: CGFloat) -> Font {
+        NSFont(name: "ArchivoNarrow-SemiBold", size: size) != nil ? .custom("ArchivoNarrow-SemiBold", size: size)
+            : .system(size: size, weight: .semibold).width(.condensed)
+    }
+    static func mono(_ size: CGFloat) -> Font {
+        NSFont(name: "IBMPlexMono", size: size) != nil ? .custom("IBMPlexMono", size: size)
+            : .system(size: size, weight: .regular, design: .monospaced)
+    }
+    static func sans(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        NSFont(name: "IBMPlexSans", size: size) != nil ? .custom("IBMPlexSans", size: size).weight(weight)
+            : .system(size: size, weight: weight)
+    }
+    static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    static var cardSpring: Animation { reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.42, dampingFraction: 0.92) }
+}
+
+enum IslandState: Equatable { case hidden, recording, note, listening, thinking, answer, processing, done, error }
+
+struct TimelineMark: Identifiable { let id = UUID(); let t: Int; let isNote: Bool }
+
+final class IslandModel: ObservableObject {
+    @Published var state: IslandState = .hidden
+    @Published var hovering = false
+    @Published var elapsed = 0
+    @Published var shots = 0
+    @Published var notes = 0
+    @Published var level: Double = 0
+    @Published var flash = false
+    @Published var noteSeconds = 0
+    @Published var question = ""
+    @Published var answer = ""
+    @Published var step = 1
+    @Published var sentTo = ""
+    @Published var errorTitle = ""
+    @Published var errorLine = ""
+    @Published var marks: [TimelineMark] = []
+    @Published var keys: [String: String] = [:]
+    var notchWidth: CGFloat = 186
+    var notchHeight: CGFloat = 32
+    var onStop: () -> Void = {}
+    var onOpenFolder: () -> Void = {}
+    var onOpenNotes: () -> Void = {}
+    var onFix: () -> Void = {}
+    var onDismiss: () -> Void = {}
+
+    var expanded: Bool { state == .recording && hovering }
+
+    /// Size of the island body under the notch band, per state.
+    var size: CGSize {
+        switch state {
+        case .hidden: return .zero
+        case .answer: return CGSize(width: 360, height: answerHeight)
+        case .done, .error: return CGSize(width: 320, height: 64)
+        default: return expanded ? CGSize(width: 340, height: 158) : CGSize(width: notchWidth, height: 30)
+        }
+    }
+
+    private var answerHeight: CGFloat {
+        let chars = answer.count + question.count / 2
+        return CGFloat(min(220, max(96, 64 + (chars / 46 + 1) * 19)))
+    }
+}
+
+struct IslandView: View {
+    @ObservedObject var m: IslandModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(Color.black).frame(height: m.notchHeight)
+            ZStack(alignment: .bottom) {
+                content
+                    .padding(.horizontal, m.state == .answer || m.expanded || m.state == .done || m.state == .error ? 16 : 12)
+                    .frame(width: m.size.width, height: m.size.height, alignment: .top)
+                    .clipped()
+                footLine
+            }
+            .frame(width: m.size.width, height: m.size.height)
+            .background(Grids.ink)
+            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: 13, bottomTrailingRadius: 13))
+            .overlay(UnevenRoundedRectangle(bottomLeadingRadius: 13, bottomTrailingRadius: 13)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1))
+        }
+        .frame(width: max(m.size.width, m.notchWidth))
+        .opacity(m.state == .hidden ? 0 : 1)
+        .animation(Grids.cardSpring, value: m.state)
+        .animation(Grids.cardSpring, value: m.expanded)
+        .animation(Grids.cardSpring, value: m.answer)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    // ----- the one line at the foot -----
+    @ViewBuilder private var footLine: some View {
+        switch m.state {
+        case .recording where m.expanded: EmptyView()   // the timeline playhead is the live mark in the panel
+        case .recording, .listening, .note:
+            Capsule().fill(Grids.lime)
+                .frame(width: max(10, m.size.width * 0.55 * CGFloat(min(1, m.level * 6))), height: 2)
+                .animation(.easeOut(duration: 0.09), value: m.level)
+                .padding(.bottom, 3)
+        case .thinking:
+            ThinkingLine().padding(.bottom, 3)
+        case .processing:
+            HStack(spacing: 0) {
+                Rectangle().fill(Grids.green).frame(width: (m.size.width - 24) * CGFloat(m.step) / 3)
+                Spacer(minLength: 0)
+            }
+            .frame(width: m.size.width - 24, height: 2)
+            .animation(.easeInOut(duration: 0.4), value: m.step)
+            .padding(.bottom, 3)
+        case .error:
+            Rectangle().fill(Grids.red).frame(height: 2)
+        default: EmptyView()
+        }
+    }
+
+    // ----- content per state -----
+    @ViewBuilder private var content: some View {
+        switch m.state {
+        case .hidden: EmptyView()
+        case .recording:
+            if m.expanded { hoverPanel.transition(.opacity) } else { compactRecording }
+        case .note:
+            compact { Text("NOTE").font(Grids.caps(11)).tracking(0.66).foregroundStyle(Grids.lime) }
+                trailing: { Text(clock(m.noteSeconds)).font(Grids.mono(12)).foregroundStyle(Grids.paper) }
+        case .listening:
+            compact { Text("ASK").font(Grids.caps(11)).tracking(0.66).foregroundStyle(Grids.lime) }
+                trailing: { Text("listening").font(Grids.mono(12)).foregroundStyle(Grids.paper.opacity(0.75)) }
+        case .thinking:
+            compact { Text("ASK").font(Grids.caps(11)).tracking(0.66).foregroundStyle(Grids.paper) }
+                trailing: { Text("thinking").font(Grids.mono(12)).foregroundStyle(Grids.paper.opacity(0.75)) }
+        case .processing:
+            compact { Text("WRITING NOTES").font(Grids.caps(11)).tracking(0.66).foregroundStyle(Grids.paper) }
+                trailing: { Text("\(m.step)/3").font(Grids.mono(12)).foregroundStyle(Grids.paper.opacity(0.75)) }
+        case .answer: answerCard.transition(.opacity)
+        case .done: doneCard.transition(.opacity)
+        case .error: errorCard.transition(.opacity)
+        }
+    }
+
+    private func compact<L: View, T: View>(@ViewBuilder _ lead: () -> L, @ViewBuilder trailing: () -> T) -> some View {
+        HStack(spacing: 8) { MarkGlyph().frame(width: 13, height: 11); lead(); Spacer(minLength: 4); trailing() }
+            .frame(height: 24)
+    }
+
+    private var compactRecording: some View {
+        compact { Text(clock(m.elapsed)).font(Grids.mono(12)).foregroundStyle(Grids.paper) }
+            trailing: {
+                HStack(spacing: 4) {
+                    Image(systemName: "viewfinder").font(.system(size: 9, weight: .semibold))
+                    Text(String(format: "%02d", m.shots)).font(Grids.mono(12))
+                }
+                .foregroundStyle(m.flash ? Grids.green : Grids.paper.opacity(0.8))
+                .scaleEffect(m.flash && !Grids.reduceMotion ? 1.12 : 1)
+                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: m.flash)
+            }
+    }
+
+    private var hoverPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 0) {
+                cell("ELAPSED", clock(m.elapsed), Grids.paper)
+                Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1, height: 34)
+                cell("SHOTS", String(format: "%02d", m.shots), Grids.paper)
+                Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1, height: 34)
+                cell("NOTES", String(format: "%02d", m.notes), m.notes > 0 ? Grids.green : Grids.paper)
+            }
+            .padding(.top, 10)
+            Text("LESSON SO FAR").font(Grids.caps(10)).tracking(0.6).foregroundStyle(Grids.paper.opacity(0.55))
+            Timeline(marks: m.marks, elapsed: m.elapsed).frame(height: 14)
+            HStack(spacing: 8) {
+                Button(action: m.onStop) {
+                    Text("Stop  \(m.keys["lesson"] ?? "")").font(Grids.sans(12, .semibold))
+                        .foregroundStyle(Grids.ink).frame(maxWidth: .infinity, minHeight: 26)
+                        .background(Grids.lime, in: RoundedRectangle(cornerRadius: 6))
+                }.buttonStyle(.plain)
+                Button(action: m.onOpenFolder) {
+                    Text("Open folder").font(Grids.sans(12, .medium)).foregroundStyle(Grids.paper)
+                        .frame(maxWidth: .infinity, minHeight: 26)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.25)))
+                }.buttonStyle(.plain)
+            }
+            Text("hold \(m.keys["note"] ?? "") note  ·  hold \(m.keys["ask"] ?? "") ask")
+                .font(Grids.mono(10)).foregroundStyle(Grids.paper.opacity(0.5))
+        }
+    }
+
+    private func cell(_ label: String, _ value: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(Grids.caps(10)).tracking(0.6).foregroundStyle(Grids.paper.opacity(0.55))
+            Text(value).font(Grids.mono(20)).foregroundStyle(color).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 8)
+    }
+
+    private var answerCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("ASK").font(Grids.caps(11)).tracking(0.66).foregroundStyle(Grids.paper.opacity(0.6))
+                Text(m.question).font(Grids.sans(12)).foregroundStyle(Grids.paper.opacity(0.7)).lineLimit(2)
+            }
+            Text(m.answer).font(Grids.sans(13)).lineSpacing(4).foregroundStyle(Grids.paper)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack { Spacer(); Text("click to close").font(Grids.mono(10)).foregroundStyle(Grids.paper.opacity(0.45)) }
+        }
+        .padding(.top, 12)
+        .contentShape(Rectangle())
+        .onTapGesture { m.onDismiss() }
+    }
+
+    private var doneCard: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("NOTES READY").font(Grids.caps(11)).tracking(0.66).foregroundStyle(Grids.green)
+                Text(m.sentTo).font(Grids.sans(12)).foregroundStyle(Grids.paper.opacity(0.75)).lineLimit(1)
+            }
+            Spacer()
+            Button(action: m.onOpenNotes) {
+                Text("Open").font(Grids.sans(12, .semibold)).foregroundStyle(Grids.ink)
+                    .padding(.horizontal, 14).frame(minHeight: 26)
+                    .background(Grids.lime, in: RoundedRectangle(cornerRadius: 6))
+            }.buttonStyle(.plain)
+        }
+        .frame(height: 60)
+    }
+
+    private var errorCard: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(m.errorTitle.uppercased()).font(Grids.caps(11)).tracking(0.66).foregroundStyle(Grids.paper)
+                Text(m.errorLine).font(Grids.sans(12)).foregroundStyle(Grids.paper.opacity(0.75)).lineLimit(2)
+            }
+            Spacer()
+            Button(action: m.onFix) {
+                Text("Fix").font(Grids.sans(12, .medium)).foregroundStyle(Grids.paper)
+                    .padding(.horizontal, 14).frame(minHeight: 26)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.3)))
+            }.buttonStyle(.plain)
+        }
+        .frame(height: 60)
+    }
+
+    private func clock(_ s: Int) -> String {
+        s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%02d:%02d", s / 60, s % 60)
+    }
+}
+
+/// The two-blade mark in paper (mono inside the island).
+struct MarkGlyph: View {
+    var body: some View {
+        if let img = Bundle.main.image(forResource: "glyph") {
+            Image(nsImage: img).resizable().renderingMode(.template).foregroundStyle(Grids.paper).aspectRatio(contentMode: .fit)
+        } else {
+            Image(systemName: "note.text").resizable().foregroundStyle(Grids.paper)
+        }
+    }
+}
+
+/// Flat event line: ink ticks for screenshots, green brackets for spoken notes, lime playhead.
+struct Timeline: View {
+    let marks: [TimelineMark]
+    let elapsed: Int
+    var body: some View {
+        GeometryReader { g in
+            let w = g.size.width, span = CGFloat(max(elapsed, 60))
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Grids.paper.opacity(0.35)).frame(height: 1.5)
+                ForEach(marks) { mk in
+                    Rectangle().fill(mk.isNote ? Grids.green : Grids.paper.opacity(0.75))
+                        .frame(width: mk.isNote ? 3 : 1.5, height: mk.isNote ? 12 : 8)
+                        .offset(x: min(w - 3, w * CGFloat(mk.t) / span))
+                }
+                Rectangle().fill(Grids.lime).frame(width: 2, height: 14)
+                    .offset(x: min(w - 2, w * CGFloat(elapsed) / span))
+            }
+            .frame(height: g.size.height)
+        }
+    }
+}
+
+/// A short green segment breathing along the foot while the AI thinks.
+final class Flag: ObservableObject { @Published var on = false }
+
+struct ThinkingLine: View {
+    @ObservedObject var flag = Flag()
+    var body: some View {
+        Capsule().fill(Grids.green).frame(width: flag.on ? 46 : 18, height: 2)
+            .onAppear {
+                guard !Grids.reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { flag.on = true }
+            }
+    }
+}
+
+/// Panels that may sit over the menu bar and the notch.
+final class TopPanel: NSPanel {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+    override var canBecomeKey: Bool { false }
+}
+
+/// Hosting view that reports hover even while Uplink is not the active app, and takes the first click.
+final class IslandHostingView: NSHostingView<IslandView> {
+    var onHover: (Bool) -> Void = { _ in }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.filter { $0.owner === self && $0.userInfo?["island"] != nil }.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: ["island": true]))
+    }
+    override func mouseEntered(with event: NSEvent) { onHover(true) }
+    override func mouseExited(with event: NSEvent) { onHover(false) }
+}
+
+final class Island {
+    let model = IslandModel()
+    private let panel: TopPanel
+    private let host: IslandHostingView
+    private var hoverWork: DispatchWorkItem?
+    private var hideWork: DispatchWorkItem?
+    private var shrinkWork: DispatchWorkItem?
+
+    init() {
+        panel = TopPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 120),
+                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        host = IslandHostingView(rootView: IslandView(m: model))
+        panel.contentView = host
+        host.onHover = { [weak self] inside in self?.hover(inside) }
+        measureNotch()
+    }
+
+    /// Notch size from the screen's top safe area and the free areas either side of it.
+    private func measureNotch() {
+        let screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main
+        guard let screen else { return }
+        if screen.safeAreaInsets.top > 0, let l = screen.auxiliaryTopLeftArea, let r = screen.auxiliaryTopRightArea {
+            model.notchHeight = screen.safeAreaInsets.top
+            model.notchWidth = max(150, screen.frame.width - l.width - r.width)
+        } else {
+            model.notchHeight = NSApp.mainMenu?.menuBarHeight ?? 24 // no notch: sit under the menu bar
+            model.notchWidth = 186
+        }
+    }
+
+    private var screen: NSScreen? { NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main }
+
+    /// The panel always matches what is drawn, so it never blocks clicks beside the island.
+    private func fitPanel(to size: CGSize, immediately: Bool) {
+        guard let screen else { return }
+        let w = max(size.width, model.notchWidth) + 2, h = model.notchHeight + size.height + 2
+        let frame = NSRect(x: screen.frame.midX - w / 2, y: screen.frame.maxY - h, width: w, height: h)
+        shrinkWork?.cancel()
+        if immediately || frame.width >= panel.frame.width && frame.height >= panel.frame.height {
+            panel.setFrame(frame, display: true)
+        } else {
+            let work = DispatchWorkItem { [weak self] in self?.panel.setFrame(frame, display: true) }
+            shrinkWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
+        }
+    }
+
+    var anchor: NSRect { panel.frame }
+
+    func set(_ state: IslandState, autoHide: TimeInterval? = nil) {
+        hideWork?.cancel()
+        measureNotch()
+        let previous = model.state
+        model.state = state
+        if state == .hidden {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                if self?.model.state == .hidden { self?.panel.orderOut(nil) }
+            }
+            return
+        }
+        fitPanel(to: model.size, immediately: previous == .hidden)
+        panel.orderFrontRegardless()
+        if let autoHide {
+            let work = DispatchWorkItem { [weak self] in self?.settle() }
+            hideWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + autoHide, execute: work)
+        }
+    }
+
+    /// After a card: back to the lesson if one is recording, else hidden.
+    var isRecording: () -> Bool = { false }
+    func settle() { set(isRecording() ? .recording : .hidden) }
+
+    func refit() { fitPanel(to: model.size, immediately: false) }
+
+    private func hover(_ inside: Bool) {
+        hoverWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.model.state == .recording else { return }
+            self.model.hovering = inside
+            self.fitPanel(to: self.model.size, immediately: false)
+        }
+        hoverWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + (inside ? 0.25 : 0.4), execute: work)
+    }
+}
+
+// MARK: - Stickers (one at a time, beside the island)
+
+final class StickerShow {
+    private var panel: TopPanel?
+    private var lastShown: [String: Date] = [:]
+    var enabled: () -> Bool = { true }
+
+    func show(_ name: String, beside anchor: NSRect, minGap: TimeInterval = 0) {
+        guard enabled(), let image = Bundle.main.image(forResource: "sticker-\(name)") else { return }
+        if minGap > 0, let last = lastShown[name], Date().timeIntervalSince(last) < minGap { return }
+        lastShown[name] = Date()
+        panel?.orderOut(nil)
+        let size: CGFloat = 56
+        let p = TopPanel(contentRect: NSRect(x: anchor.maxX + 10, y: anchor.maxY - size - 6, width: size + 12, height: size + 12),
+                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        p.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = false
+        p.ignoresMouseEvents = true
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        p.contentView = NSHostingView(rootView: StickerView(image: image, size: size))
+        p.orderFrontRegardless()
+        panel = p
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) { [weak self, weak p] in
+            p?.orderOut(nil)
+            if self?.panel === p { self?.panel = nil }
+        }
+    }
+}
+
+final class StickerPhase: ObservableObject { @Published var value = 0 } // 0 tucked, 1 out, 2 leaving
+
+struct StickerView: View {
+    let image: NSImage
+    let size: CGFloat
+    @ObservedObject var p = StickerPhase()
+    private var phase: Int { p.value }
+    var body: some View {
+        Image(nsImage: image).resizable().frame(width: size, height: size)
+            .scaleEffect(phase == 1 ? 1 : 0.6)
+            .rotationEffect(.degrees(phase == 1 ? -6 : -14))
+            .offset(x: phase == 1 ? 0 : -18)
+            .opacity(phase == 1 ? 1 : 0)
+            .frame(width: size + 12, height: size + 12)
+            .onAppear {
+                let pop: Animation = Grids.reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.32, dampingFraction: 0.62)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { withAnimation(pop) { p.value = 1 } }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.98) {
+                    withAnimation(.easeIn(duration: 0.22)) { p.value = 2 }
+                }
+            }
     }
 }
 

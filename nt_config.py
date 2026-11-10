@@ -78,7 +78,17 @@ DEFAULTS = {
     "route_dir": "agents",
     "routes": [],            # [{id, description, kind, file}]
     "screenshots": True,
+    "shortcuts": {},         # filled per platform by shortcuts()
+    "mark_style": "ring",    # Ask the lesson marks the spot with a still "ring" or a gliding "pointer"
 }
+
+# Default keys. "lesson" toggles, "note" and "ask" are held while speaking.
+DEFAULT_SHORTCUTS = ({"lesson": "ctrl+alt+n", "note": "ctrl+alt+m", "ask": "ctrl+alt+a"} if os.name == "nt" else
+                     {"lesson": "ctrl+option+n", "note": "ctrl+option+m", "ask": "ctrl+option+a"})
+
+
+def shortcuts(cfg):
+    return {**DEFAULT_SHORTCUTS, **(cfg.get("shortcuts") or {})}
 
 
 def load():
@@ -86,6 +96,7 @@ def load():
     if CONFIG.exists():
         cfg.update(json.loads(CONFIG.read_text(encoding="utf-8")))
     cfg["library"] = cfg["library"] or default_library()
+    cfg["shortcuts"] = shortcuts(cfg)
     if not cfg["routes"]:
         cfg["routes"] = [{"id": k, "description": v, "kind": "topic", "file": ""} for k, v in TOPICS.items()]
     return cfg

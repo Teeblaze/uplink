@@ -35,6 +35,11 @@ It takes about 5 minutes. Settings opens in your browser at the end.
 |---|---|---|
 | Start or stop a lesson | Ctrl+Option+N | Ctrl+Alt+N |
 | Add a spoken note while it records | hold Ctrl+Option+M | hold Ctrl+Alt+M |
+| Ask about your screen | hold Ctrl+Option+A | hold Ctrl+Alt+A |
+
+Change any of them in **Settings > Your shortcuts**: click a box and press the keys you want.
+
+**Ask about your screen:** hold the key and ask, for example "where do I export this?". Your AI looks at the screen, answers out loud and in writing, and marks the spot with a still ring, or with a gliding pointer if you turn that on in Settings. Your real mouse never moves. Questions asked during a lesson go into that lesson's notes, and on to your agents.
 
 The menu also has **Ask my library** (answers only from your notes, with the lesson and timestamp for each point), **Open last notes**, **Take screenshots of the lesson** (on by default) and **Settings**.
 
@@ -67,6 +72,9 @@ The menu also has **Ask my library** (answers only from your notes, with the les
 | `nt_config.py` | Settings, finding your AI apps and agents, linking agents to their reading lists |
 | `settings.py`, `settings.html` | The Settings page (runs on your computer only) |
 | `ask.py` | Ask my library |
+| `ask_screen.py` | Ask about your screen: speech to text, then your AI answers from a screenshot |
 | `notes_prompt_generic.md` | The instructions your AI gets for writing notes |
 
 Made by Adetayo Apena (MrTb) at Grids. MIT licence.
+
+"Ask about your screen" is inspired by [Clicky](https://github.com/farzaa/clicky) by Farza (MIT licence), an AI teacher that sees your screen, talks and points.

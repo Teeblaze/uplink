@@ -49,6 +49,12 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0;
 .bar div { max-width: 720px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 8px; align-items: center; }
 .bar .msg { flex: 1; margin: 0; }
 .note { font-size: 13px; color: var(--muted); border-left: 2px solid var(--line); padding-left: 10px; margin-top: 12px; }
+.keyrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px;
+          border: 1px solid var(--line); background: var(--panel); border-radius: 6px; margin-bottom: 6px; }
+.keyrow small { display: block; color: var(--muted); font-size: 12.5px; }
+.keybox { min-width: 150px; text-align: center; font: 600 14px ui-monospace, SFMono-Regular, Menlo, monospace;
+          padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--field); color: var(--ink); cursor: pointer; }
+.keybox.on { border-color: var(--ink); }
 </style>
 </head>
 <body>
@@ -84,7 +90,19 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0;
   </section>
 
   <section>
-    <h2>3. Who learns from your notes</h2>
+    <h2>3. Your shortcuts</h2>
+    <p class="hint">Click a box, then press the keys you want. Use at least one of Control, Option (Alt) or Command (Windows key) with a letter, number, F-key or Space.</p>
+    <div id="keys"></div>
+    <div class="msg" id="keymsg"></div>
+    <label class="field">When an answer is about a spot on your screen, show it with</label>
+    <label class="choice"><input type="radio" name="mark" value="ring">
+      <span><b>A still ring</b><small>A lime ring appears on the spot for a few seconds. Nothing moves.</small></span></label>
+    <label class="choice"><input type="radio" name="mark" value="pointer">
+      <span><b>A gliding pointer</b><small>A lime arrow glides from beside your cursor to the spot. Your real mouse never moves.</small></span></label>
+  </section>
+
+  <section>
+    <h2>4. Who learns from your notes</h2>
     <p class="hint">Each lesson goes to the agents it fits. Ticked agents get a reading list and a line in their instructions to read it before a job.</p>
     <div id="dests"></div>
     <div class="group">Your own (Custom GPTs, Gems, Claude Projects)</div>
@@ -99,7 +117,7 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0;
   </section>
 
   <section id="memsec">
-    <h2>4. Tell your AI about the library</h2>
+    <h2>5. Tell your AI about the library</h2>
     <p class="hint">Adds one short paragraph to your AI app's main instructions, so every chat knows where your notes are.</p>
     <div id="mems"></div>
   </section>
@@ -213,8 +231,56 @@ function renderMems() {
     <span><b>${esc(m.label)}</b><small>${esc(m.file)}</small></span></label>`).join("");
 }
 
+// ----- shortcuts -----
+const IS_MAC = /Mac/.test(navigator.platform);
+const ACTIONS = [
+  ["lesson", "Start or stop a lesson", "Press once to start, again to stop."],
+  ["note", "Add a spoken note", "Hold while you speak."],
+  ["ask", "Ask about your screen", "Hold while you ask; the answer is spoken and shown."],
+];
+let keys = {};
+const PRETTY = IS_MAC ? { ctrl: "⌃", option: "⌥", shift: "⇧", cmd: "⌘" } : { ctrl: "Ctrl+", alt: "Alt+", shift: "Shift+", win: "Win+" };
+function pretty(combo) {
+  return combo.split("+").map(p => PRETTY[p] || (p === "space" ? "Space" : p.toUpperCase())).join("");
+}
+function renderKeys() {
+  $("keys").innerHTML = ACTIONS.map(([id, name, sub]) => `<div class="keyrow"><span><b>${name}</b><small>${sub}</small></span>
+    <button type="button" class="keybox" data-k="${id}">${esc(pretty(keys[id] || ""))}</button></div>`).join("");
+  document.querySelectorAll(".keybox").forEach(b => b.onclick = () => listen(b));
+}
+function listen(box) {
+  document.querySelectorAll(".keybox").forEach(b => b.classList.remove("on"));
+  box.classList.add("on"); box.textContent = "Press keys...";
+  say($("keymsg"), "");
+  const onKey = e => {
+    e.preventDefault();
+    const m = e.code.match(/^Key([A-Z])$|^Digit([0-9])$|^(F[0-9]{1,2})$|^(Space)$/);
+    if (!m) return; // still waiting for the main key
+    const mods = [];
+    if (e.ctrlKey) mods.push("ctrl");
+    if (e.altKey) mods.push(IS_MAC ? "option" : "alt");
+    if (e.shiftKey) mods.push("shift");
+    if (e.metaKey) mods.push(IS_MAC ? "cmd" : "win");
+    window.removeEventListener("keydown", onKey, true);
+    box.classList.remove("on");
+    const id = box.dataset.k;
+    if (!mods.some(x => x !== "shift")) {
+      say($("keymsg"), "Add Control, Option (Alt) or Command so the shortcut does not clash with typing.", "bad");
+      return renderKeys();
+    }
+    const combo = [...mods, (m[1] || m[2] || m[3] || m[4]).toLowerCase()].join("+");
+    const clash = Object.entries(keys).find(([k, v]) => k !== id && v === combo);
+    if (clash) { say($("keymsg"), "That shortcut is already used by another action.", "bad"); return renderKeys(); }
+    keys[id] = combo;
+    renderKeys();
+    say($("keymsg"), "New shortcut set. Press Save to use it.", "ok");
+  };
+  window.addEventListener("keydown", onKey, true);
+}
+
 function body() {
-  return { provider: provider(), model: $("model").value.trim(), key: $("key").value.trim(),
+  return { provider: provider(), model: $("model").value.trim(), key: $("key").value.trim(), shortcuts: keys,
+           mark_style: (document.querySelector("input[name=mark]:checked") || {}).value || "ring",
            ollama_url: $("ollama").value.trim(), library: $("library").value.trim(), routes: routes(),
            link_memories: [...document.querySelectorAll("input[name=mem]:checked")].map(m => m.value) };
 }
@@ -260,6 +326,10 @@ $("save").onclick = async () => {
   S = await api("/api/state");
   $("library").value = S.config.library;
   $("ollama").value = S.config.ollama_url;
+  keys = { ...S.config.shortcuts };
+  renderKeys();
+  const mark = document.querySelector(`input[name=mark][value=${S.config.mark_style === "pointer" ? "pointer" : "ring"}]`);
+  if (mark) mark.checked = true;
   renderProviders(); renderMems(); onProvider(S.config.first_run); renderDests();
 })().catch(e => say($("msg"), e.message, "bad"));
 </script>

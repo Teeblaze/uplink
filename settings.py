@@ -44,6 +44,10 @@ def merged(body):
         cfg["library"] = str(Path(body["library"]).expanduser())
     if "routes" in body:
         cfg["routes"] = body["routes"]
+    if isinstance(body.get("shortcuts"), dict):
+        cfg["shortcuts"] = {k: str(v) for k, v in body["shortcuts"].items() if k in ("lesson", "note", "ask") and v}
+    if body.get("mark_style") in ("ring", "pointer"):
+        cfg["mark_style"] = body["mark_style"]
     if "screenshots" in body:
         cfg["screenshots"] = bool(body["screenshots"])
     return cfg

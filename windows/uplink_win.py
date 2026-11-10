@@ -36,8 +36,19 @@ import nt_config  # noqa: E402
 
 APPDATA = Path(os.environ["APPDATA"]) / "Uplink"
 SESSIONS = APPDATA / "sessions"
+ASKS = APPDATA / "asks"
 PY = sys.executable.replace("pythonw.exe", "python.exe")
 RATE = 48000
+
+
+def win_keys(combo):
+    """Settings stores Mac-style names too; the keyboard library wants alt and windows."""
+    return "+".join({"option": "alt", "opt": "alt", "cmd": "windows", "command": "windows", "win": "windows",
+                     "control": "ctrl"}.get(k, k) for k in combo.lower().split("+"))
+
+
+def pretty(combo):
+    return "+".join(k.capitalize() if len(k) > 1 else k.upper() for k in win_keys(combo).split("+"))
 
 
 def env_for():
@@ -66,6 +77,10 @@ class Uplink:
         self.jobs = 0
         self.last_notes = None
         self.hwnd = None
+        self.ask_dir = None
+        self.ask_on = False
+        self.ask_t = None
+        self.keys = nt_config.shortcuts(self.cfg)
         self.icon = pystray.Icon("Uplink", self.draw_icon(False), "Uplink", self.menu())
 
     # ----- tray -----
@@ -83,15 +98,16 @@ class Uplink:
     def menu(self):
         M = pystray.MenuItem
         return pystray.Menu(
-            M(lambda _: "Stop lesson (Ctrl+Alt+N)" if self.recording else "Start lesson (Ctrl+Alt+N)", lambda: self.toggle()),
-            M("Hold Ctrl+Alt+M to add a spoken note", None, enabled=False),
+            M(lambda _: f"{'Stop' if self.recording else 'Start'} lesson ({pretty(self.keys['lesson'])})", lambda: self.toggle()),
+            M(lambda _: f"Hold {pretty(self.keys['note'])} to add a spoken note", None, enabled=False),
+            M(lambda _: f"Hold {pretty(self.keys['ask'])} to ask about your screen", None, enabled=False),
             M(lambda _: f"Working on {self.jobs} job(s)..." if self.jobs else "Idle", None, enabled=False),
             pystray.Menu.SEPARATOR,
             M("Open last notes", lambda: os.startfile(self.last_notes), enabled=lambda _: bool(self.last_notes)),
             M("Open notes library", lambda: os.startfile(self.library())),
             M("Ask my library...", lambda: self.ask()),
             M("Take screenshots of the lesson", lambda: self.toggle_shots(), checked=lambda _: self.cfg["screenshots"]),
-            M("Settings (AI, library, agents)...", lambda: self.settings()),
+            M("Settings (AI, shortcuts, agents)...", lambda: self.settings()),
             pystray.Menu.SEPARATOR,
             M("Quit Uplink", lambda: self.quit()),
         )
@@ -252,13 +268,140 @@ class Uplink:
         keyboard.unhook_all()
         self.icon.stop()
 
+    # ----- ask the lesson (idea from Clicky, github.com/farzaa/clicky, MIT) -----
+    def ask_down(self):
+        if self.ask_on or self.note_on:
+            return
+        self.ask_on = True
+        self.ask_t = time.time()
+        self.ask_dir = ASKS / dt.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        self.ask_dir.mkdir(parents=True, exist_ok=True)
+        self.grab_window(self.ask_dir)
+        self.notify("Listening", "Ask about your screen, then let go.")
+        threading.Thread(target=self.ask_loop, args=(self.ask_dir / "question.wav",), daemon=True).start()
+
+    def ask_loop(self, path):
+        mic = sc.default_microphone()
+        with sf.SoundFile(str(path), "w", samplerate=RATE, channels=1) as f, mic.recorder(samplerate=RATE, channels=1) as rec:
+            while self.ask_on:
+                f.write(rec.record(numframes=RATE // 20))
+
+    def grab_window(self, folder):
+        try:
+            hwnd = win32gui.GetForegroundWindow()
+            l, t, r, b = win32gui.GetWindowRect(hwnd)
+            with mss.mss() as grab:
+                raw = grab.grab({"left": l, "top": t, "width": r - l, "height": b - t})
+            img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+            if img.width > 1600:
+                img = img.resize((1600, int(img.height * 1600 / img.width)))
+            img.save(folder / "shot.jpg", quality=80)
+            (folder / "window.json").write_text(json.dumps({"x": l, "y": t, "w": r - l, "h": b - t}))
+        except Exception:
+            pass
+
+    def ask_up(self):
+        if not self.ask_on:
+            return
+        self.ask_on = False
+        folder, started = self.ask_dir, self.ask_t
+        if time.time() - started < 0.7:
+            return
+        lesson = self.session
+        offset = int(started - self.t0) if self.recording and self.t0 else None
+        threading.Thread(target=self.answer, args=(folder, lesson, offset), daemon=True).start()
+
+    def answer(self, folder, lesson, offset):
+        time.sleep(0.3)  # let the recorder close the file
+        self.jobs += 1
+        self.refresh()
+        subprocess.run([PY, "-I", str(CORE / "ask_screen.py"), str(folder)], env=env_for(),
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+        self.jobs -= 1
+        self.refresh()
+        try:
+            result = json.loads((folder / "answer.json").read_text(encoding="utf-8"))
+        except Exception:
+            result = {"error": "No answer came back. Check Settings."}
+        if "error" in result:
+            return self.notify("Could not answer", result["error"])
+        answer = result.get("answer", "")
+        self.notify(result.get("question") or "Answer", answer)
+        point = result.get("point")
+        if point and (folder / "window.json").exists():
+            f = json.loads((folder / "window.json").read_text())
+            x, y = int(f["x"] + point["x"] * f["w"]), int(f["y"] + point["y"] * f["h"])
+            style = nt_config.load().get("mark_style", "ring")
+            subprocess.Popen([sys.executable, str(HERE / "uplink_win.py"), "--mark", style, str(x), str(y)])
+        try:
+            import win32com.client
+            win32com.client.Dispatch("SAPI.SpVoice").Speak(answer)
+        except Exception:
+            pass
+        if lesson and offset is not None:
+            shots = lesson / "shots"
+            if (folder / "shot.jpg").exists():
+                shots.mkdir(exist_ok=True)
+                (shots / f"{offset}.jpg").write_bytes((folder / "shot.jpg").read_bytes())
+            with open(lesson / "asks.jsonl", "a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"t": offset, "question": result.get("question", ""), "answer": answer}) + "\n")
+
+    # ----- shortcuts (set in Settings, reloaded when saved) -----
+    def bind_keys(self):
+        keyboard.unhook_all()
+        k = self.keys
+        keyboard.add_hotkey(win_keys(k["lesson"]), self.toggle)
+        keyboard.add_hotkey(win_keys(k["note"]), self.note_down)
+        keyboard.on_release_key(win_keys(k["note"]).split("+")[-1], lambda e: self.note_up())
+        keyboard.add_hotkey(win_keys(k["ask"]), self.ask_down)
+        keyboard.on_release_key(win_keys(k["ask"]).split("+")[-1], lambda e: self.ask_up())
+
+    def watch_config(self):
+        stamp = nt_config.CONFIG.stat().st_mtime if nt_config.CONFIG.exists() else 0
+        while True:
+            time.sleep(3)
+            now = nt_config.CONFIG.stat().st_mtime if nt_config.CONFIG.exists() else 0
+            if now != stamp:
+                stamp = now
+                self.cfg = nt_config.load()
+                self.keys = nt_config.shortcuts(self.cfg)
+                self.bind_keys()
+                self.refresh()
+
     def run(self):
-        keyboard.add_hotkey("ctrl+alt+n", self.toggle)
-        keyboard.add_hotkey("ctrl+alt+m", self.note_down)
-        keyboard.on_release_key("m", lambda e: self.note_up())
+        self.bind_keys()
+        threading.Thread(target=self.watch_config, daemon=True).start()
         if not nt_config.configured():
             self.settings()  # first run: pick the AI, library and agents
         self.icon.run()
+
+
+def show_mark(style, x, y, seconds=5):
+    """A still lime ring, or a lime arrow that glides from beside the cursor. Never moves the mouse."""
+    import tkinter as tk
+    root = tk.Tk()
+    root.overrideredirect(True)
+    root.attributes("-topmost", True)
+    root.attributes("-transparentcolor", "#010101")
+    root.configure(bg="#010101")
+    size = 76 if style == "ring" else 34
+    c = tk.Canvas(root, width=size, height=size, bg="#010101", highlightthickness=0)
+    c.pack()
+    if style == "ring":
+        c.create_oval(6, 6, size - 6, size - 6, outline="#DCFF2E", width=4)
+        root.geometry(f"{size}x{size}+{x - size // 2}+{y - size // 2}")
+    else:
+        c.create_polygon(3, 3, size - 6, size * 0.58, size * 0.45, size * 0.64, size * 0.30, size - 4,
+                         fill="#DCFF2E", outline="#161817", width=2)
+        cx, cy = win32gui.GetCursorPos()
+        steps = 28
+        for i in range(steps + 1):
+            k = i / steps
+            k = k * k * (3 - 2 * k)  # ease in and out
+            px, py = int(cx + 8 + (x - 3 - cx - 8) * k), int(cy + 8 + (y - 3 - cy - 8) * k)
+            root.after(int(i * 700 / steps), lambda px=px, py=py: root.geometry(f"{size}x{size}+{px}+{py}"))
+    root.after(int(seconds * 1000), root.destroy)
+    root.mainloop()
 
 
 def ask_dialog():
@@ -284,7 +427,10 @@ if __name__ == "__main__":
         ctypes.windll.shcore.SetProcessDpiAwareness(2)  # real pixel coordinates for screenshots
     except Exception:
         pass
-    if "--ask" in sys.argv:
+    if "--mark" in sys.argv:
+        i = sys.argv.index("--mark")
+        show_mark(sys.argv[i + 1], int(sys.argv[i + 2]), int(sys.argv[i + 3]))
+    elif "--ask" in sys.argv:
         ask_dialog()
     else:
         Uplink().run()

@@ -98,6 +98,18 @@ def main():
                    "is shown. To place a screenshot in the notes, write the token SHOT:<seconds> on its own line "
                    "(for example SHOT:75); use 3 to 8 of the most useful ones. Skip blank, duplicate or unrelated frames.\n")
         prompt += "\n".join(f"- {stamp(int(p.stem))}: shots/{p.name}" for p in shots) + "\n"
+    asks = []
+    if (session / "asks.jsonl").exists():
+        for line in (session / "asks.jsonl").read_text(encoding="utf-8").splitlines():
+            try:
+                asks.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    if asks:
+        prompt += ("\nQUESTIONS ASKED DURING THE LESSON\nThe user held a key, asked about their screen, and got these answers. "
+                   "Add a section \"## Questions you asked\" before \"Apply this\": each question with its timestamp, the answer "
+                   "in one line, and a correction if the lesson itself shows the answer was wrong.\n")
+        prompt += "\n".join(f"- [{stamp(a.get('t', 0))}] Q: {a.get('question', '')} | A: {a.get('answer', '')}" for a in asks) + "\n"
     prompt += f"\nTRANSCRIPT\n{transcript}"
 
     images = [(f"Screenshot shots/{p.name} at {stamp(int(p.stem))}", f"shots/{p.name}") for p in shots]

@@ -1,3 +1,5 @@
+<img src="assets/icon-1024.png" width="128" alt="Uplink icon">
+
 # Uplink
 
 **Watch a lesson. Uplink it to your AI.**

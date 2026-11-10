@@ -25,6 +25,15 @@ let searchPath: String = {
 let configURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/Uplink/config.json")
 
+/// Uplink's mark for the menu bar (one colour; macOS tints it for light and dark).
+let uplinkGlyph: NSImage? = {
+    guard let img = Bundle.main.image(forResource: "glyph") else { return nil }
+    img.size = NSSize(width: 18, height: 18)
+    img.isTemplate = true
+    img.accessibilityDescription = "Uplink"
+    return img
+}()
+
 /// Settings written by settings.py (nt_config.py): the library folder and the chosen AI.
 func readConfig() -> [String: Any] {
     guard let data = try? Data(contentsOf: configURL),
@@ -417,7 +426,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             button.image = NSImage(systemSymbolName: noteStartedAt != nil ? "mic.fill" : "record.circle.fill", accessibilityDescription: "Recording")
             button.title = String(format: " %d:%02d", s / 60, s % 60)
         } else {
-            button.image = NSImage(systemSymbolName: processing > 0 ? "hourglass" : "note.text", accessibilityDescription: "Uplink")
+            button.image = processing > 0
+                ? NSImage(systemSymbolName: "hourglass", accessibilityDescription: "Working")
+                : (uplinkGlyph ?? NSImage(systemSymbolName: "note.text", accessibilityDescription: "Uplink"))
             button.title = processing > 0 ? " Working" : ""
         }
         let menu = NSMenu()

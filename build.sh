@@ -11,7 +11,8 @@ swiftc -O -o build/Uplink Uplink.swift \
 [ -f build/Uplink ] || { echo "Build failed"; exit 1; }
 pkill -x Uplink 2>/dev/null || true
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp assets/AppIcon.icns assets/glyph.png assets/glyph@2x.png "$APP/Contents/Resources/"
 cp build/Uplink "$APP/Contents/MacOS/Uplink"
 cp Info.plist "$APP/Contents/Info.plist"
 plutil -insert UplinkHome -string "$PWD" "$APP/Contents/Info.plist"

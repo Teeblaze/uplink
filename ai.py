@@ -6,6 +6,7 @@ anthropic, openai, gemini (API keys), ollama (local models). See nt_config.PROVI
 import base64
 import json
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -119,9 +120,24 @@ def _gemini_cli(cfg, provider, prompt, cwd, images, read_files):
 
 # ----- API keys -----
 
-def _http(url, body, headers):
+class Busy(AIError):
+    """The service is overloaded right now (HTTP 5xx or 'high demand'); worth retrying or another model."""
+
+
+def _http(url, body, headers, retries=(3, 8, 15, 15)):
+    """POST JSON. Busy services (500/502/503/504) are retried after the waits in `retries` (seconds)."""
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"content-type": "application/json", **headers})
+    for attempt in range(len(retries) + 1):
+        req = urllib.request.Request(url, data=data, headers={"content-type": "application/json", **headers})
+        try:
+            return _http_once(req)
+        except Busy:
+            if attempt == len(retries):
+                raise
+            time.sleep(retries[attempt])
+
+
+def _http_once(req):
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
             return json.loads(r.read().decode("utf-8"))
@@ -131,8 +147,10 @@ def _http(url, body, headers):
             raise AIError("The API key was not accepted. Check it in Settings.")
         if e.code == 404:
             raise AIError("That model was not found. Pick another model in Settings.")
+        if e.code in (500, 502, 503, 504) or "high demand" in detail.lower() or "overloaded" in detail.lower():
+            raise Busy("The AI service is busy right now. Uplink tried several times; use Retry last lesson in a few minutes.")
         if e.code == 429:
-            raise AIError("Rate limit or no credit left on this API account.")
+            raise AIError("Rate limit reached, or the free daily allowance is used up. Try again later or tomorrow.")
         raise AIError(f"API error {e.code}: {detail}")
     except urllib.error.URLError as e:
         raise AIError(f"Could not reach the AI service: {e.reason}")
@@ -193,14 +211,33 @@ def _gemini(cfg, provider, prompt, cwd, images, read_files):
         parts.append({"text": label})
         parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64(path)}})
     parts.append({"text": prompt})
-    model = model_of(cfg, provider).removeprefix("models/")
-    r = _http(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-              {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": MAX_TOKENS}},
-              {"x-goog-api-key": key_of(cfg, provider)})
+    key = key_of(cfg, provider)
+    first = model_of(cfg, provider).removeprefix("models/")
+    body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": MAX_TOKENS}}
+    r = None
+    for model in [first] + _gemini_fallbacks(key, first):
+        try:
+            r = _http(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                      body, {"x-goog-api-key": key})
+            break
+        except Busy:
+            continue  # this model is overloaded; try the next one the key can use
+    if r is None:
+        raise AIError("Gemini is busy right now (all models tried). Use Retry last lesson in a few minutes.")
     cands = r.get("candidates") or []
     if not cands:
         raise AIError("Gemini returned no answer: " + json.dumps(r.get("promptFeedback", {}))[:200])
     return "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []))
+
+
+def _gemini_fallbacks(key, current, limit=2):
+    """Other Flash models this key can use, newest first, for when the chosen one is overloaded."""
+    try:
+        names = list_models("gemini", key)
+    except AIError:
+        return []
+    flash = [n for n in names if "flash" in n and n != current and "image" not in n and "tts" not in n and "live" not in n]
+    return sorted(flash, reverse=True)[:limit]
 
 
 def _ollama(cfg, provider, prompt, cwd, images, read_files):

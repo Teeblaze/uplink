@@ -1,12 +1,18 @@
 #!/bin/zsh
-# Runs after a lesson stops: transcribe on this Mac, then the chosen AI writes and files the notes.
+# Runs after a lesson stops (or on Retry): transcribe on this computer, then the chosen AI writes and files the notes.
+# A retry reuses the transcript when it already exists, so only the failed step runs again.
 # Usage: process.sh <session_dir>
 S="$1"
 T="$(dirname "$0")"
 PY="${UPLINK_PYTHON:-$T/.venv/bin/python}"
+rm -f "$S/result.txt"
 {
-  echo "== $(date) transcribing"
-  "$PY" -I "$T/transcribe.py" "$S" || { echo "ERROR|Transcription failed. See process.log." > "$S/result.txt"; exit 1; }
+  if [ -s "$S/transcript.md" ]; then
+    echo "== $(date) transcript already made, reusing it"
+  else
+    echo "== $(date) transcribing"
+    "$PY" -I "$T/transcribe.py" "$S" || { echo "ERROR|Transcription failed. See process.log." > "$S/result.txt"; exit 1; }
+  fi
   echo "== $(date) writing notes"
   "$PY" -I "$T/make_notes.py" "$S"
   echo "== $(date) done"

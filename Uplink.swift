@@ -909,6 +909,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             menu.addItem(p)
         }
         menu.addItem(.separator())
+        if processing == 0, recorder == nil, failedLesson() != nil {
+            menu.addItem(withTitle: "Retry last lesson", action: #selector(retryLesson), keyEquivalent: "").target = self
+        }
         let last = NSMenuItem(title: "Open last notes", action: #selector(openLast), keyEquivalent: "")
         last.target = self
         last.isEnabled = lastNotes != nil
@@ -926,6 +929,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc private func menuToggle() { toggle() }
+
+    /// The newest lesson whose notes failed (for example the AI's usage limit), if its recording is still there.
+    private func failedLesson() -> URL? {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: sessionsDir.path) else { return nil }
+        for name in names.sorted(by: >) {
+            let dir = sessionsDir.appendingPathComponent(name)
+            guard let result = try? String(contentsOf: dir.appendingPathComponent("result.txt"), encoding: .utf8) else { continue }
+            if result.hasPrefix("OK|") { return nil } // the newest finished lesson succeeded
+            let hasAudio = (try? fm.contentsOfDirectory(atPath: dir.path))?.contains { $0.hasPrefix("system.") || $0 == "transcript.md" } ?? false
+            if result.hasPrefix("ERROR|") && hasAudio { return dir }
+        }
+        return nil
+    }
+
+    @objc private func retryLesson() {
+        guard let dir = failedLesson() else { return }
+        island.model.step = 1
+        island.set(.processing)
+        process(dir)
+    }
     @objc private func openLast() { if let p = lastNotes { NSWorkspace.shared.open(URL(fileURLWithPath: p)) } }
     @objc private func openLibrary() { NSWorkspace.shared.open(URL(fileURLWithPath: learningDir)) }
     @objc private func toggleShots() { screenshotsOn.toggle(); refresh() }

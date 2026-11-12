@@ -15,7 +15,8 @@ It takes about 5 minutes (it downloads a 500 MB speech model once). Let it finis
 
 If it stops:
 - "Command Line Tools" (Mac): a macOS window has opened. Ask the person to click Install, wait for it to finish, then run the installer again.
-- "Python 3.12": on Mac with Homebrew the installer installs it itself. Otherwise ask the person to install Python 3.12 from https://www.python.org/downloads/ (on Windows, tick "Add python.exe to PATH"), then run the installer again.
+- "Python 3.12" (Mac): the installer installs it itself, with Homebrew if present, otherwise the official signed package from python.org. That step asks for the Mac password once: ask the person to type it in their own Terminal (run the install command in their Terminal, not in yours, if you cannot pass a password prompt).
+- "Python 3.12" (Windows): ask the person to install Python 3.12 from https://www.python.org/downloads/ and tick "Add python.exe to PATH", then run the installer again.
 - Anything that asks for a password: stop and ask the person to type it themselves. Never type a password.
 
 ## 3. Permissions (Mac)

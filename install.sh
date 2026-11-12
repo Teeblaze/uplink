@@ -37,8 +37,21 @@ if [ -z "$PY312" ] && command -v brew >/dev/null; then
   PY312="$(command -v python3.12 || echo /opt/homebrew/bin/python3.12)"
 fi
 if [ -z "$PY312" ] || [ ! -x "$PY312" ]; then
-  echo "Python 3.12 is needed (newer versions lack the speech-to-text package)."
-  echo "Install it from https://www.python.org/downloads/ (3.12.x), then run this installer again."
+  # No Python 3.12 and no Homebrew: install the official python.org package (signed by the Python Software Foundation).
+  echo "Installing Python 3.12 from python.org (needed for speech to text). Your Mac password is asked once."
+  PKG="$(mktemp -d)/python-3.12.10-macos11.pkg"
+  curl -fsSL "https://www.python.org/ftp/python/3.12.10/python-3.12.10-macos11.pkg" -o "$PKG"
+  if ! pkgutil --check-signature "$PKG" | grep -q "Python Software Foundation"; then
+    echo "The Python download could not be verified, so it was not installed."
+    echo "Install Python 3.12 from https://www.python.org/downloads/, then run this installer again."
+    exit 1
+  fi
+  sudo installer -pkg "$PKG" -target / </dev/tty
+  rm -f "$PKG"
+  PY312="$(command -v python3.12 || echo /usr/local/bin/python3.12)"
+fi
+if [ ! -x "$PY312" ]; then
+  echo "Python 3.12 could not be installed. Install it from https://www.python.org/downloads/ (3.12.x), then run this installer again."
   exit 1
 fi
 

@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/Teeblaze/uplink/main/install.sh | b
 irm https://raw.githubusercontent.com/Teeblaze/uplink/main/windows/install.ps1 | iex
 ```
 
-It takes about 5 minutes. Settings opens in your browser at the end.
+It takes about 5 minutes. On a Mac without Python 3.12 it installs it for you from python.org and asks for your Mac password once. Settings opens in your browser at the end.
 
 ## Use
 | | Mac | Windows |
